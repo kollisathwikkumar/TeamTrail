@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: brain
+      POSTGRES_PASSWORD: brain
+      POSTGRES_DB: company_brain
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./packages/core/src/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brain -d company_brain"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  falkordb:
+    image: falkordb/falkordb@sha256:107455e862a824e45e8e9f5a7fbfdf5e00a08b14e13eae2577c72fd9e3f59ba6
+    ports:
+      - "6380:6379"
+      - "3002:3000"
+    volumes:
+      - falkordbdata:/var/lib/falkordb/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  server:
+    build:
+      context: .
+      args:
+        VITE_AUTH0_DOMAIN: ${VITE_AUTH0_DOMAIN:-}
+        VITE_AUTH0_CLIENT_ID: ${VITE_AUTH0_CLIENT_ID:-}
+        VITE_AUTH0_AUDIENCE: ${VITE_AUTH0_AUDIENCE:-}
+    ports:
+      - "3334:3333"
+    environment:
+      DATABASE_URL: postgresql://brain:brain@postgres:5432/company_brain
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: "6379"
+      FALKORDB_GRAPH: company_brain
+      BRAIN_GROUP_ID: teamtrail_workspace
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      NANGO_API_KEY: ${NANGO_API_KEY:-}
+      BRAIN_AUTH_TOKEN: ${BRAIN_AUTH_TOKEN:-}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-}
+      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
+      TEAMTRAIL_BOOTSTRAP_SUBJECT: ${TEAMTRAIL_BOOTSTRAP_SUBJECT:-}
+      BRAIN_CORS_ORIGINS: http://localhost:4180
+      TEAMTRAIL_MCP_TOKEN: ${TEAMTRAIL_MCP_TOKEN:-}
+      TEAMTRAIL_MCP_RESOURCE_URL: ${TEAMTRAIL_MCP_RESOURCE_URL:-}
+      BRAIN_REST_HOST: "0.0.0.0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      falkordb:
+        condition: service_healthy
+    command: ["node", "packages/server/dist/index.js", "--rest", "--port", "3333", "--host", "0.0.0.0"]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  falkordbdata:

@@ -1,0 +1,10 @@
+:80 {
+	encode zstd gzip
+
+	@backend path /api/* /sources/* /mcp /mcp/*
+	reverse_proxy @backend api:3333 {
+		flush_interval -1
+	}
+
+	reverse_proxy web:80
+}

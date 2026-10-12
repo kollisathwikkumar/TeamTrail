@@ -1,0 +1,111 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: brain
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a random hex value}
+      POSTGRES_DB: company_brain
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../../packages/core/src/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brain -d company_brain"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  falkordb:
+    image: falkordb/falkordb@sha256:107455e862a824e45e8e9f5a7fbfdf5e00a08b14e13eae2577c72fd9e3f59ba6
+    volumes:
+      - falkordbdata:/var/lib/falkordb/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        VITE_AUTH0_DOMAIN: ${VITE_AUTH0_DOMAIN:?Set VITE_AUTH0_DOMAIN}
+        VITE_AUTH0_CLIENT_ID: ${VITE_AUTH0_CLIENT_ID:?Set VITE_AUTH0_CLIENT_ID}
+        VITE_AUTH0_AUDIENCE: ${VITE_AUTH0_AUDIENCE:?Set VITE_AUTH0_AUDIENCE}
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://brain:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a random hex value}@postgres:5432/company_brain
+      FALKORDB_HOST: falkordb
+      FALKORDB_PORT: "6379"
+      FALKORDB_GRAPH: company_brain
+      BRAIN_GROUP_ID: ${BRAIN_GROUP_ID:-teamtrail_workspace}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:?Set AUTH0_DOMAIN}
+      AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:?Set AUTH0_CLIENT_ID}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:?Set AUTH0_AUDIENCE}
+      TEAMTRAIL_BOOTSTRAP_SUBJECT: ${TEAMTRAIL_BOOTSTRAP_SUBJECT:?Set TEAMTRAIL_BOOTSTRAP_SUBJECT to the initial Auth0 owner's sub}
+      TEAMTRAIL_MCP_RESOURCE_URL: ${TEAMTRAIL_MCP_RESOURCE_URL:?Set TEAMTRAIL_MCP_RESOURCE_URL to the public HTTPS MCP URL}
+      NANGO_API_KEY: ${NANGO_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      BRAIN_REST_HOST: 0.0.0.0
+    command: ["node", "packages/server/dist/index.js", "--rest", "--port", "3333", "--host", "0.0.0.0"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      falkordb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3333/api/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/free-30-days/web.Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    # Local-only convenience entry point; remote access is provided by the tunnel.
+    ports:
+      - "127.0.0.1:${TEAMTRAIL_PORT:-8080}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+      - api
+    restart: unless-stopped
+
+  quick-tunnel:
+    image: cloudflare/cloudflared:2026.3.0
+    profiles: [quick-tunnel]
+    command: ["tunnel", "--no-autoupdate", "--url", "http://caddy:80"]
+    depends_on:
+      - caddy
+    restart: unless-stopped
+
+  named-tunnel:
+    image: cloudflare/cloudflared:2026.3.0
+    profiles: [named-tunnel]
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN:-}"]
+    depends_on:
+      - caddy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  falkordbdata:
+  caddy_data:
+  caddy_config:
