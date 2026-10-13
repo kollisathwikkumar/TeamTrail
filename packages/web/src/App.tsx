@@ -421,11 +421,11 @@ function ConnectionsPage({ status, request, onStatusChange }: {
   const connect = async (provider: string) => {
     setConnecting(provider);
     setMessage('');
+    let closeUI: (() => void) | undefined;
     try {
-      const session = await request<{ token: string; providerConfigKey: string }>(`/api/integrations/${provider}/connect-session`, { method: 'POST', body: JSON.stringify({}) });
-      const nango = new Nango({ connectSessionToken: session.token });
+      const nango = new Nango();
       let ui: ReturnType<typeof nango.openConnectUI>;
-      ui = nango.openConnectUI({ sessionToken: session.token, lang: 'en', onEvent: async event => {
+      ui = nango.openConnectUI({ lang: 'en', onEvent: async event => {
         if (event.type === 'connect') {
           try {
             await request(`/api/integrations/${provider}/complete`, { method: 'POST', body: JSON.stringify({ connectionId: event.payload.connectionId, providerConfigKey: event.payload.providerConfigKey }) });
@@ -445,7 +445,13 @@ function ConnectionsPage({ status, request, onStatusChange }: {
         }
       } });
       ui.open();
+      closeUI = () => ui.close();
+      const session = await request<{ token: string; providerConfigKey: string }>(`/api/integrations/${provider}/connect-session`, { method: 'POST', body: JSON.stringify({}) });
+      ui.setSessionToken(session.token);
     } catch (cause) {
+      // The modal opens synchronously from the click to avoid browser frame/popup blocking.
+      // A failed session request should close the loading UI and surface the API error.
+      closeUI?.();
       setMessage(cause instanceof Error ? cause.message : 'Could not start provider authorization.');
       setConnecting(null);
     }
