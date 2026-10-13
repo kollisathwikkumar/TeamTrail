@@ -15,6 +15,6 @@ createRoot(document.getElementById('root')!).render(
     clientId={clientId}
     cacheLocation="memory"
     useRefreshTokens
-    authorizationParams={{ redirect_uri: window.location.origin, audience, scope: 'openid profile email' }}
+    authorizationParams={{ redirect_uri: window.location.origin, audience, scope: 'openid profile email mcp:read mcp:write' }}
   >{app}</Auth0Provider> : app,
 );
