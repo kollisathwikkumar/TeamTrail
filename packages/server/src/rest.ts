@@ -20,6 +20,7 @@ import type { AccessContext, BrainConfig, VisibilityPolicy } from '@company-brai
 import { createMcpServer } from './mcp.js';
 import { McpHttpSessions } from './mcp-remote.js';
 import { createMcpOAuthVerifier } from './mcp-oauth.js';
+import { createNangoConnectSession, deleteNangoConnection, providerIntegrationKey, verifyNangoConnection, type TeamTrailProvider } from './nango-connect.js';
 
 export const REST_CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 
@@ -203,8 +204,62 @@ export async function startRestServer(brainConfig: BrainConfig, restConfig: Rest
 
   // This endpoint reports deploy-time capabilities only. It never claims that a
   // provider account is connected unless persisted connection state is available.
-  routes.set('GET /api/workspace/status', async () => {
-    return buildWorkspaceStatus(brainConfig.defaultGroupId || 'default', process.env, mcpVerifier ? 'auth0-oauth' : (activeMcpToken ? 'shared-bearer' : 'disabled'));
+  routes.set('GET /api/workspace/status', async (_body, _params, _rawBody, headers) => {
+    const status = buildWorkspaceStatus(workspaceGroupId, process.env, mcpVerifier ? 'auth0-oauth' : (activeMcpToken ? 'shared-bearer' : 'disabled'));
+    const actor = headers?.['x-teamtrail-actor'];
+    status.integrations.connected = actor ? (await brain.listProviderConnections(actor, workspaceGroupId)).map(connection => connection.provider) : [];
+    return status;
+  });
+
+  routes.set('GET /api/integrations', async (_body, _params, _rawBody, headers) => {
+    const actor = headers?.['x-teamtrail-actor'];
+    if (!actor) throw new HttpError(401, 'Verified identity is required to view provider connections.');
+    return { connections: await brain.listProviderConnections(actor, workspaceGroupId) };
+  });
+  routes.set('POST /api/integrations/:provider/connect-session', async (_body, params, _rawBody, headers) => {
+    const actor = headers?.['x-teamtrail-actor'];
+    const provider = params.get('provider') || '';
+    const key = providerIntegrationKey(provider, process.env);
+    if (!actor) throw new HttpError(401, 'Verified identity is required to connect a provider.');
+    if (!key) throw new HttpError(404, 'Unsupported provider.');
+    const enabledIntegrations = (process.env.NANGO_INTEGRATIONS || '').split(',').map(value => value.trim()).filter(Boolean);
+    if (!process.env.NANGO_API_KEY || !enabledIntegrations.includes(key)) throw new HttpError(409, 'This provider is not configured in Nango yet.');
+    try {
+      return await createNangoConnectSession({ apiKey: process.env.NANGO_API_KEY, provider: provider as TeamTrailProvider, integrationKey: key, principalId: actor, workspaceId: workspaceGroupId });
+    } catch (error) {
+      const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : 502;
+      throw new HttpError(status, error instanceof Error ? error.message : 'Could not start provider authorization.');
+    }
+  });
+  routes.set('POST /api/integrations/:provider/complete', async (body, params, _rawBody, headers) => {
+    const actor = headers?.['x-teamtrail-actor'];
+    const provider = params.get('provider') || '';
+    const key = providerIntegrationKey(provider, process.env);
+    const connectionId = body.connectionId;
+    if (!actor) throw new HttpError(401, 'Verified identity is required to save a provider connection.');
+    if (!key || body.providerConfigKey !== key) throw new HttpError(400, 'Provider configuration did not match the allowed integration.');
+    if (typeof connectionId !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(connectionId)) throw new HttpError(400, 'A valid connectionId is required.');
+    const enabledIntegrations = (process.env.NANGO_INTEGRATIONS || '').split(',').map(value => value.trim()).filter(Boolean);
+    if (!process.env.NANGO_API_KEY || !enabledIntegrations.includes(key)) throw new HttpError(409, 'This provider is not configured in Nango yet.');
+    const verified = await verifyNangoConnection({ apiKey: process.env.NANGO_API_KEY, connectionId, providerConfigKey: key, principalId: actor, workspaceId: workspaceGroupId });
+    if (!verified) throw new HttpError(400, 'Nango did not verify this provider connection.');
+    await brain.upsertProviderConnection({ principalId: actor, groupId: workspaceGroupId, provider: provider as TeamTrailProvider, providerConfigKey: key, connectionId });
+    return { ok: true, provider, status: 'connected' };
+  });
+  routes.set('DELETE /api/integrations/:provider', async (_body, params, _rawBody, headers) => {
+    const actor = headers?.['x-teamtrail-actor'];
+    const provider = params.get('provider') || '';
+    if (!actor) throw new HttpError(401, 'Verified identity is required to disconnect a provider.');
+    if (!['google-drive', 'slack', 'github'].includes(provider)) throw new HttpError(404, 'Unsupported provider.');
+    const connection = await brain.getProviderConnection(actor, workspaceGroupId, provider);
+    if (!connection) throw new HttpError(404, 'Provider connection not found.');
+    if (!process.env.NANGO_API_KEY || !(await deleteNangoConnection({ apiKey: process.env.NANGO_API_KEY, connectionId: connection.connectionId, providerConfigKey: connection.providerConfigKey }))) {
+      throw new HttpError(502, 'Nango could not revoke this provider connection.');
+    }
+    await brain.revokeProviderConnection(actor, workspaceGroupId, provider);
+    const deleted = await brain.deleteSourceData({ groupId: workspaceGroupId, sourceType: `nango:${connection.providerConfigKey}`, connectionId: connection.connectionId });
+    await brain.revokeProviderIdentityLink(actor, workspaceGroupId, provider);
+    return { ok: true, deleted };
   });
 
   routes.set('GET /api/mcp/grants', async (_body, _params, _rawBody, headers) => {
@@ -535,9 +590,9 @@ export function buildWorkspaceStatus(groupId: string, env: NodeJS.ProcessEnv, mc
     authentication: { mode: auth0Configured ? 'auth0-jwt' : 'shared-token', auth0Configured },
     integrations: {
       broker: env.NANGO_API_KEY ? 'nango-configured' : 'not-configured',
-      configured: (env.NANGO_INTEGRATIONS || '').split(',').map(value => value.trim()).filter(Boolean),
+      configured: env.NANGO_API_KEY ? (env.NANGO_INTEGRATIONS || '').split(',').map(value => value.trim()).filter(Boolean) : [],
       connected: [] as string[],
-      note: 'Provider account connections are not persisted or verified by this build.',
+      note: env.NANGO_API_KEY ? 'Provider authorization uses Nango Connect. Connected accounts are recorded per Auth0 user; data indexing requires configured sync models.' : 'Set the server-side NANGO_API_KEY and configured NANGO_INTEGRATIONS to enable per-user provider consent.',
     },
     mcp: { endpoint: '/mcp', transport: 'Streamable HTTP', enabled: mcpEnabled !== false && mcpEnabled !== 'disabled', auth: mcpEnabled === true ? 'shared-bearer' : mcpEnabled === false ? 'disabled' : mcpEnabled },
   };

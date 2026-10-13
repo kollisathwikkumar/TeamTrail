@@ -49,6 +49,22 @@ CREATE TABLE IF NOT EXISTS provider_identity_links (
 CREATE INDEX IF NOT EXISTS idx_provider_identity_links_principal
   ON provider_identity_links(principal_id, group_id, status);
 
+-- Provider connection references are metadata only; Nango retains OAuth secrets.
+CREATE TABLE IF NOT EXISTS provider_connections (
+  principal_id TEXT NOT NULL,
+  group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('google-drive', 'slack', 'github')),
+  provider_config_key TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (principal_id, group_id, provider),
+  UNIQUE (group_id, provider_config_key, connection_id)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_connections_owner
+  ON provider_connections(principal_id, group_id, status);
+
 CREATE TABLE IF NOT EXISTS mcp_oauth_grants (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   token_hash TEXT NOT NULL UNIQUE,

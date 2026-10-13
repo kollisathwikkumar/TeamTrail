@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
+import Nango from '@nangohq/frontend';
 import type { GraphEdge, GraphNode } from './GraphViewport';
 import { apiTokenHeaders } from './api-auth';
 
@@ -351,7 +352,7 @@ function WorkspaceApp({ auth0 }: { auth0?: Auth0WorkspaceProps }) {
           </div>
           {view === 'sources' && <SourceLibrary sources={sourceNodes} />}
           {view === 'timeline' && <DecisionTimeline graph={graph} onOpenSource={url => window.open(url, '_blank', 'noopener,noreferrer')} />}
-          {view === 'connections' && <ConnectionsPage status={workspaceStatus} />}
+          {view === 'connections' && <ConnectionsPage status={workspaceStatus} request={request} onStatusChange={async () => setWorkspaceStatus(await request<WorkspaceStatus>('/api/workspace/status'))} />}
           {view === 'mcp' && <McpPage status={workspaceStatus} />}
         </section>
       </main>
@@ -403,7 +404,13 @@ function viewDescription(view: View): string {
   })[view];
 }
 
-function ConnectionsPage({ status }: { status: WorkspaceStatus | null }) {
+function ConnectionsPage({ status, request, onStatusChange }: {
+  status: WorkspaceStatus | null;
+  request: <T,>(path: string, init?: RequestInit) => Promise<T>;
+  onStatusChange: () => Promise<void>;
+}) {
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [message, setMessage] = useState('');
   const apps = [
     { id: 'google-drive', label: 'Google Drive', detail: 'Docs and files', icon: 'G' },
     { id: 'slack', label: 'Slack', detail: 'Messages and channels', icon: '#' },
@@ -411,15 +418,64 @@ function ConnectionsPage({ status }: { status: WorkspaceStatus | null }) {
   ];
   const configured = new Set(status?.integrations.configured || []);
   const connected = new Set(status?.integrations.connected || []);
+  const connect = async (provider: string) => {
+    setConnecting(provider);
+    setMessage('');
+    try {
+      const session = await request<{ token: string; providerConfigKey: string }>(`/api/integrations/${provider}/connect-session`, { method: 'POST', body: JSON.stringify({}) });
+      const nango = new Nango({ connectSessionToken: session.token });
+      let ui: ReturnType<typeof nango.openConnectUI>;
+      ui = nango.openConnectUI({ sessionToken: session.token, lang: 'en', onEvent: async event => {
+        if (event.type === 'connect') {
+          try {
+            await request(`/api/integrations/${provider}/complete`, { method: 'POST', body: JSON.stringify({ connectionId: event.payload.connectionId, providerConfigKey: event.payload.providerConfigKey }) });
+            await onStatusChange();
+            setMessage(`${providerLabel(provider)} connected. Index sync still needs provider models and permission rules.`);
+            ui.close();
+          } catch (cause) {
+            setMessage(cause instanceof Error ? cause.message : 'Could not verify the provider connection.');
+          } finally {
+            setConnecting(null);
+          }
+        } else if (event.type === 'error') {
+          setMessage(event.payload.errorMessage || 'The provider authorization failed.');
+          setConnecting(null);
+        } else if (event.type === 'close') {
+          setConnecting(null);
+        }
+      } });
+      ui.open();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'Could not start provider authorization.');
+      setConnecting(null);
+    }
+  };
+  const disconnect = async (provider: string) => {
+    setConnecting(provider);
+    setMessage('');
+    try {
+      await request(`/api/integrations/${provider}`, { method: 'DELETE', body: JSON.stringify({}) });
+      await onStatusChange();
+      setMessage(`${providerLabel(provider)} disconnected.`);
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'Could not disconnect the provider.');
+    } finally {
+      setConnecting(null);
+    }
+  };
   return <div className="integration-page">
     <div className="integration-intro"><div><span className="integration-kicker">SOURCE CONNECTIONS</span><h2>Bring your team's existing knowledge</h2><p>Each source remains the system of record. TeamTrail indexes approved content and keeps citations linked to its origin.</p></div><span className="integration-count">{connected.size} connected</span></div>
     <div className="integration-list">{apps.map(app => {
       const isConnected = connected.has(app.id);
-      const isConfigured = [...configured].some(key => key.toLowerCase().includes(app.id.split('-')[0]));
-      return <article className="integration-card" key={app.id}><span className={`integration-logo logo-${app.id}`}>{app.icon}</span><div className="integration-copy"><strong>{app.label}</strong><span>{app.detail}</span></div><span className={`integration-state${isConnected ? ' integration-state-live' : ''}`}><StatusDot ok={isConnected} />{isConnected ? 'Connected' : isConfigured ? 'Provider configured · not connected' : 'Not connected'}</span><button className="integration-action" disabled={!isConnected} title="Provider consent requires per-user identity and a configured OAuth integration">{isConnected ? 'Manage' : 'Connect'}</button></article>;
+      const isConfigured = [...configured].some(key => key.toLowerCase().includes(app.id === 'google-drive' ? 'google' : app.id));
+      return <article className="integration-card" key={app.id}><span className={`integration-logo logo-${app.id}`}>{app.icon}</span><div className="integration-copy"><strong>{app.label}</strong><span>{app.detail}</span></div><span className={`integration-state${isConnected ? ' integration-state-live' : ''}`}><StatusDot ok={isConnected} />{isConnected ? 'Connected · permission scoped to your account' : isConfigured ? 'Ready to connect' : 'Integration setup required'}</span>{isConnected ? <button className="integration-action" disabled={connecting !== null} onClick={() => void disconnect(app.id)}>{connecting === app.id ? 'Disconnecting…' : 'Disconnect'}</button> : <button className="integration-action" disabled={!isConfigured || connecting !== null} onClick={() => void connect(app.id)} title={!isConfigured ? 'This provider must first be configured in Nango.' : undefined}>{connecting === app.id ? 'Opening…' : 'Connect'}</button>}</article>;
     })}</div>
-    <div className="integration-notice"><strong>{status?.integrations.broker === 'nango-configured' ? 'Nango is configured' : 'Connection broker not configured'}</strong><p>{status?.integrations.note || 'Checking workspace connection configuration…'} Provider consent and sync are not represented as complete until the provider and per-user connection are verified.</p></div>
+    <div className="integration-notice"><strong>{status?.integrations.broker === 'nango-configured' ? 'Nango Connect' : 'Connection broker not configured'}</strong><p>{message || status?.integrations.note || 'Checking workspace connection configuration…'}</p></div>
   </div>;
+}
+
+function providerLabel(provider: string): string {
+  return provider === 'google-drive' ? 'Google Drive' : provider === 'github' ? 'GitHub' : 'Slack';
 }
 
 function McpPage({ status }: { status: WorkspaceStatus | null }) {

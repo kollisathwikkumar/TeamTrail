@@ -186,6 +186,44 @@ export class Brain {
     if (rows.length) await this.auditLog(groupId, 'provider_identity_revoked', 'provider_identity', `${principalId}:${provider}`, { provider }, principalId);
   }
 
+  async upsertProviderConnection(input: { principalId: string; groupId: string; provider: 'google-drive' | 'slack' | 'github'; providerConfigKey: string; connectionId: string }): Promise<void> {
+    await this.db`
+      INSERT INTO provider_connections (principal_id, group_id, provider, provider_config_key, connection_id, status)
+      VALUES (${input.principalId}, ${input.groupId}, ${input.provider}, ${input.providerConfigKey}, ${input.connectionId}, 'active')
+      ON CONFLICT (principal_id, group_id, provider) DO UPDATE SET
+        provider_config_key = EXCLUDED.provider_config_key,
+        connection_id = EXCLUDED.connection_id,
+        status = 'active', updated_at = now()
+    `;
+    await this.auditLog(input.groupId, 'provider_connected', 'provider_connection', `${input.principalId}:${input.provider}`, { provider: input.provider, providerConfigKey: input.providerConfigKey }, input.principalId);
+  }
+
+  async listProviderConnections(principalId: string, groupId = this.groupId): Promise<Array<{ provider: string; providerConfigKey: string; connectionId: string; status: string; updatedAt: string }>> {
+    const rows = await this.db<{ provider: string; provider_config_key: string; connection_id: string; status: string; updated_at: Date }[]>`
+      SELECT provider, provider_config_key, connection_id, status, updated_at
+      FROM provider_connections WHERE principal_id = ${principalId} AND group_id = ${groupId} AND status = 'active'
+      ORDER BY provider
+    `;
+    return rows.map(row => ({ provider: row.provider, providerConfigKey: row.provider_config_key, connectionId: row.connection_id, status: row.status, updatedAt: row.updated_at.toISOString() }));
+  }
+
+  async getProviderConnection(principalId: string, groupId: string, provider: string): Promise<{ provider: string; providerConfigKey: string; connectionId: string } | null> {
+    const rows = await this.db<{ provider: string; provider_config_key: string; connection_id: string }[]>`
+      SELECT provider, provider_config_key, connection_id FROM provider_connections
+      WHERE principal_id = ${principalId} AND group_id = ${groupId} AND provider = ${provider} AND status = 'active'
+    `;
+    const row = rows[0];
+    return row ? { provider: row.provider, providerConfigKey: row.provider_config_key, connectionId: row.connection_id } : null;
+  }
+
+  async revokeProviderConnection(principalId: string, groupId: string, provider: string): Promise<void> {
+    await this.db`
+      UPDATE provider_connections SET status = 'revoked', updated_at = now()
+      WHERE principal_id = ${principalId} AND group_id = ${groupId} AND provider = ${provider} AND status = 'active'
+    `;
+    await this.auditLog(groupId, 'provider_disconnected', 'provider_connection', `${principalId}:${provider}`, { provider }, principalId);
+  }
+
   async registerMcpGrant(input: { tokenHash: string; principalId: string; clientId: string; groupId: string; scopes: string[]; expiresAt: Date }): Promise<boolean> {
     await this.db`
       INSERT INTO mcp_oauth_grants (token_hash, principal_id, client_id, group_id, scopes, expires_at)
