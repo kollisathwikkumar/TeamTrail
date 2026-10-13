@@ -4,6 +4,7 @@ import { assertProductionAuth, buildMcpProtectedResourceMetadata, buildWorkspace
 
 test('CSP permits the Auth0 token worker without relaxing script execution', () => {
   assert.match(REST_CONTENT_SECURITY_POLICY, /worker-src 'self' blob:/);
+  assert.match(REST_CONTENT_SECURITY_POLICY, /frame-src https:\/\/connect\.nango\.dev/);
   assert.match(REST_CONTENT_SECURITY_POLICY, /script-src 'self'/);
   assert.doesNotMatch(REST_CONTENT_SECURITY_POLICY, /unsafe-eval/);
 });

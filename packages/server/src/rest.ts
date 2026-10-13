@@ -22,7 +22,7 @@ import { McpHttpSessions } from './mcp-remote.js';
 import { createMcpOAuthVerifier } from './mcp-oauth.js';
 import { createNangoConnectSession, deleteNangoConnection, providerIntegrationKey, verifyNangoConnection, type TeamTrailProvider } from './nango-connect.js';
 
-export const REST_CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+export const REST_CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:; frame-src https://connect.nango.dev; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 
 interface RestConfig {
   port: number;
