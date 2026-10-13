@@ -1,4 +1,5 @@
 import { FalkorDB } from 'falkordb';
+import { randomUUID } from 'node:crypto';
 import type { AccessContext, Entity, Episode, Fact } from '../types.js';
 import { canAccessVisibility, normalizeVisibility } from '../security.js';
 
@@ -199,6 +200,13 @@ export class FalkorDBStore {
       ...(this.password ? { password: this.password } : {}),
     });
     this.graph = this.client.selectGraph(this.graphName);
+    // FalkorDB creates a graph key on the first write. A read-only probe against
+    // a new hosted graph fails with "Invalid graph operation on empty key", so
+    // create and immediately remove a unique probe node before checking reads.
+    await this.graph.query(
+      'CREATE (n:TeamTrailStartupProbe {id: $id}) DELETE n RETURN 1 AS ok',
+      { params: { id: randomUUID() } },
+    );
     await this.graph.roQuery('RETURN 1 AS ok');
   }
 

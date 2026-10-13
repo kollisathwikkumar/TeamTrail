@@ -6,6 +6,20 @@ For a working 30-day demo with **durable PostgreSQL + FalkorDB**, run the existi
 
 This keeps app, MCP, Postgres, and FalkorDB together on a persistent VM and avoids Render sleep behavior and FalkorDB Cloud Free's lack of TLS/continuous persistence/backups. The compose stack does not publish the API or databases directly. A Cloudflare Tunnel supplies the public HTTPS front door.
 
+## FalkorDB Cloud connection
+
+The application already reads FalkorDB connection settings from the server environment and syncs/query routes use that graph store when `FALKORDB_HOST` is set. For FalkorDB Cloud, copy the instance endpoint host and port from **Instance details → Connectivity** and configure these values as server-side secrets/environment variables (do not put the password in frontend build variables or commit `.env`):
+
+```dotenv
+FALKORDB_HOST=<endpoint-host>
+FALKORDB_PORT=<endpoint-port>
+FALKORDB_GRAPH=company_brain
+FALKORDB_USERNAME=falkordb
+FALKORDB_PASSWORD=<instance-password>
+```
+
+The app opens a direct FalkorDB connection. On first startup it creates and immediately removes a unique probe node so FalkorDB materializes the named graph, then verifies the read path with `RETURN 1 AS ok`. Wait until the cloud instance is **Running** before testing connectivity. FalkorDB Free is suitable only for a disposable demo graph; its plan does not include TLS, continuous persistence, or automated backups. Avoid storing sensitive or sole-copy data on it.
+
 If trial credits are not available, the strict-$0 fallback is Cloudflare Pages/Render Static for the UI, Render Free for the API, Supabase Free for PostgreSQL, and FalkorDB Cloud Free for graph storage. That is a prototype mode only: Render sleeps after 15 minutes, Supabase can pause after a week idle, and FalkorDB Free lists no TLS, continuous persistence, or automated backups. Do not place sensitive or sole-copy data there. See [Render free limits](https://render.com/docs/free), [Supabase Free](https://supabase.com/pricing), and [FalkorDB plans](https://www.falkordb.com/plans/).
 
 ## What is already in this repository
