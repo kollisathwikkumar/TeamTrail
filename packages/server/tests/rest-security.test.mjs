@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assertProductionAuth, buildMcpProtectedResourceMetadata, buildWorkspaceStatus, corsOriginForRequest, normalizeAuth0Domain, normalizeMcpResourceUrl, productionMcpToken, requiresRestBearerAuth, resourceMetadataUrl, RestRequestLimiter, roleCanAccess } from '../dist/rest.js';
+import { assertProductionAuth, buildMcpProtectedResourceMetadata, buildWorkspaceStatus, corsOriginForRequest, normalizeAuth0Domain, normalizeMcpResourceUrl, productionMcpToken, requiresRestBearerAuth, resourceMetadataUrl, RestRequestLimiter, roleCanAccess, REST_CONTENT_SECURITY_POLICY } from '../dist/rest.js';
+
+test('CSP permits the Auth0 token worker without relaxing script execution', () => {
+  assert.match(REST_CONTENT_SECURITY_POLICY, /worker-src 'self' blob:/);
+  assert.match(REST_CONTENT_SECURITY_POLICY, /script-src 'self'/);
+  assert.doesNotMatch(REST_CONTENT_SECURITY_POLICY, /unsafe-eval/);
+});
 
 test('same-origin requests receive their own origin for CORS', () => {
   assert.equal(corsOriginForRequest('https://teamtrail.example', 'teamtrail.example', 'https', []), 'https://teamtrail.example');

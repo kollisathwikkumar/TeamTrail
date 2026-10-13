@@ -21,6 +21,8 @@ import { createMcpServer } from './mcp.js';
 import { McpHttpSessions } from './mcp-remote.js';
 import { createMcpOAuthVerifier } from './mcp-oauth.js';
 
+export const REST_CONTENT_SECURITY_POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+
 interface RestConfig {
   port: number;
   host: string;
@@ -296,7 +298,7 @@ export async function startRestServer(brainConfig: BrainConfig, restConfig: Rest
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', REST_CONTENT_SECURITY_POLICY);
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
